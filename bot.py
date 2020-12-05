@@ -24,7 +24,7 @@ UNIPOOL_ABI = os.getenv("UNIPOOL_ABI")
 ZERO_ADDR = '0x0000000000000000000000000000000000000000'
 ONE_18DEC = 1000000000000000000
 ONE_6DEC = 1000000
-MAIN_BASETOKEN = 'ESD'
+MAIN_BASETOKEN = 'Badger'
 
 CIRCULATING_EXCLUDED = {
             'MPH': [
@@ -43,21 +43,21 @@ activity_start = discord.Streaming(name='bot startup',url='https://etherscan.io/
 update_index = 0
 
 ASSETS = {
-    'ESD': {
-        'addr':'0x36F3FD68E7325a35EB768F1AedaAe9EA0689d723',
-        'main_quotetoken':'USDC',
+    'Badger': {
+        'addr':'0x3472A5A71965499acd81997a54BBA8D852C6E53d',
+        'main_quotetoken':'WBTC',
         'pools': {
-            'USDC': {
+            'WBTC': {
                 'router':UNIROUTER_ADDR,
-                'addr':'0x88ff79eB2Bc5850F27315415da8685282C7610F9',
+                'addr':'0xcD7989894bc033581532D2cd88Da5db0A4b12859',
                 'basetoken_index': 0,
                 'quotetoken_index': 1,
-                'rewards':'0x4082D11E506e3250009A991061ACd2176077C88f',
+                'rewards':'0x235c9e24D3FB2FAFd58a2E49D454Fdcd2DBf7FF1',
                 'oracles': [],
-                #'oracle': [
-                #    {'addr':'0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc','type':'mult',}
-                #    {'addr':'0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc','type':'div',}
-                #    ],
+                'oracles': [
+                    {'addr':'0xBb2b8038a1640196FbE3e38816F3e67Cba72D940','basetoken_index':0,'quotetoken_index':1,},
+                    {'addr':'0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc','basetoken_index':1,'quotetoken_index':0,},
+                    ],
                 },
             },
         },
@@ -75,40 +75,44 @@ async def update_price():
     asset_list = list(ASSETS.keys())
     basetoken_name = asset_list[update_index % len(asset_list)]
     basetoken = ASSETS[basetoken_name]
+    basetoken_addr = basetoken['addr']
+    basetoken_contract = w3.eth.contract(address=basetoken_addr, abi=TOKEN_ABI)
     quotetoken_name = basetoken['main_quotetoken']
     pool = basetoken['pools'][quotetoken_name]
-    basetoken_contract = w3.eth.contract(address=basetoken['addr'], abi=TOKEN_ABI)
     pool_contract = w3.eth.contract(address=pool['addr'], abi=UNIPOOL_ABI)
-    quotetoken_addr = pool_contract.functions[f'token{pool["quotetoken_index"]}']().call()
+    basetoken_index = pool['quotetoken_index']
+    quotetoken_index = pool['basetoken_index']
+    quotetoken_addr = pool_contract.functions[f'token{quotetoken_index}']().call()
     quotetoken_contract = w3.eth.contract(address=quotetoken_addr, abi=TOKEN_ABI)
     router_contract = w3.eth.contract(address=pool['router'], abi=UNIROUTER_ABI)
 
     # fetch pool state
-    print(f'fetching pool reserves for {basetoken_name} ({basetoken["addr"]})...')
+    print(f'fetching pool reserves for {basetoken_name} ({basetoken_addr}) and {quotetoken_name} ({quotetoken_addr})...')
     poolvals = pool_contract.functions['getReserves']().call()
-    #oraclevals = oracle_contract.functions['getReserves']().call()
     
     # calculate price
     print(f'calculating price...')
     atoms_per_basetoken = 10**basetoken_contract.functions['decimals']().call()
     atoms_per_quotetoken = 10**quotetoken_contract.functions['decimals']().call()
-    token_price = router_contract.functions['quote'](atoms_per_basetoken, poolvals[0], poolvals[1]).call() / atoms_per_quotetoken
+    token_price = router_contract.functions['quote'](atoms_per_basetoken, poolvals[basetoken_index], poolvals[quotetoken_index]).call() / atoms_per_quotetoken
+    print(f'base pool price: {token_price}')
     oracle_price = 1
     for oracle in pool['oracles']:
-        oracle_contract = w3.eth.contract(address=oracle['addr'])
+        oracle_contract = w3.eth.contract(address=oracle['addr'], abi=UNIPOOL_ABI)
         oracle_reserves = oracle_contract.functions['getReserves']().call()
-        atoms_per_oracle_token0 = 10**w3.eth.contract(address=oracle_contract.functions['token0']().call()).functions['decimals']().call()
-        atoms_per_oracle_token1 = 10**w3.eth.contract(address=oracle_contract.functions['token1']().call()).functions['decimals']().call()
-        oracle_price_step = oracle_price * router_contract.functions['quote'](ONE_6DEC, oraclevals[0], oraclevals[1]).call()*10**-18
-        if oracle['type'] == 'div':
-            oracle_price_step = oracle_price_step ** -1
+        oracle_basetoken = f'token{oracle["basetoken_index"]}'
+        oracle_quotetoken = f'token{oracle["quotetoken_index"]}'
+        atoms_per_oracle_basetoken = 10**w3.eth.contract(address=oracle_contract.functions[oracle_basetoken]().call(), abi=TOKEN_ABI).functions['decimals']().call()
+        atoms_per_oracle_quotetoken = 10**w3.eth.contract(address=oracle_contract.functions[oracle_quotetoken]().call(), abi=TOKEN_ABI).functions['decimals']().call()
+        oraclevals = oracle_contract.functions['getReserves']().call()
+        oracle_price_step = router_contract.functions['quote'](atoms_per_oracle_basetoken, oraclevals[oracle['basetoken_index']], oraclevals[oracle['quotetoken_index']]).call()  / atoms_per_oracle_quotetoken
         oracle_price = oracle_price * oracle_price_step
     print(f'oracle price: {oracle_price}')
     price = token_price * oracle_price
 
     # update price
     print(f'updating the price...')
-    msg = f'${price:0.4f} {basetoken_name}'
+    msg = f'${price:0.2f} {basetoken_name}'
     new_price = discord.Streaming(name=msg,url=f'https://etherscan.io/token/basetoken["addr"]')
     print(msg)
     await client.change_presence(activity=new_price)
@@ -186,7 +190,8 @@ async def on_message(msg):
                                 f':arrows_counterclockwise: [Trade {asset}](https://app.uniswap.org/#/swap?outputCurrency={ASSETS[asset]["addr"]}), '
                                 f'[Add Liquidity](https://app.uniswap.org/#/add/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/{ASSETS[asset]["addr"]}), '
                                 f'[Remove Liquidity](https://app.uniswap.org/#/remove/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/{ASSETS[asset]["addr"]})\n'
-                                f':bar_chart: [{asset}:USDC Uniswap chart](https://www.dextools.io/app/uniswap/pair-explorer/{uni_addr})'
+                                f':bar_chart: [{asset}:USDC on dextools](https://www.dextools.io/app/uniswap/pair-explorer/{uni_addr}); '
+                                f'[{asset}:USDC on dex.vision](https://beta.dex.vision/?ticker=UniswapV2:ESDUSDC-0x88ff79eB2Bc5850F27315415da8685282C7610F9&interval=720)'
                     )
             await msg.channel.send(embed=embed)
 #        elif '!incentives' in msg.content or '!farm' in msg.content:
